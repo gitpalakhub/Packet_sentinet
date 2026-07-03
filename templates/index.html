@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Packet Sentinel</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>🛡️ Packet Sentinel</h1>
+  <p class="subtitle">Network capture analysis — source: <code>{{ csv_name }}</code></p>
+</header>
+
+<section class="upload-section">
+  <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" class="upload-form">
+    <label for="fileInput" class="upload-label">
+      📁 Upload Wireshark CSV export
+    </label>
+    <div class="upload-controls">
+      <input type="file" id="fileInput" name="file" accept=".csv" required>
+      <button type="submit">Analyze</button>
+    </div>
+  </form>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <div class="flash-messages">
+        {% for message in messages %}
+          <div class="flash">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+</section>
+
+{% if not has_data %}
+<div class="alert">
+  No data loaded yet. Upload a CSV above, exported from Wireshark via
+  <strong>File → Export Packet Dissections → As CSV</strong>.
+</div>
+{% endif %}
+
+<section class="stats-grid">
+  <div class="stat-card">
+    <span class="stat-value" id="total-packets">{{ summary.total_packets }}</span>
+    <span class="stat-label">Total Packets</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-value" id="total-bytes">{{ summary.total_bytes }}</span>
+    <span class="stat-label">Total Bytes</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-value">{{ summary.protocol_counts | length }}</span>
+    <span class="stat-label">Distinct Protocols</span>
+  </div>
+</section>
+
+<section class="charts-grid">
+  <div class="chart-box">
+    <h3>Protocol Distribution</h3>
+    <canvas id="protocolChart"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>Top Source IPs</h3>
+    <canvas id="sourceChart"></canvas>
+  </div>
+</section>
+
+<section class="table-section">
+  <div class="table-controls">
+    <input type="text" id="searchBox" placeholder="Search source, destination, info...">
+    <select id="protocolFilter">
+      <option value="">All Protocols</option>
+      {% for proto in summary.protocol_counts.keys() %}
+      <option value="{{ proto }}">{{ proto }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <table id="packetTable">
+    <thead>
+      <tr>
+        <th>No.</th>
+        <th>Time</th>
+        <th>Source</th>
+        <th>Destination</th>
+        <th>Protocol</th>
+        <th>Length</th>
+        <th>Info</th>
+      </tr>
+    </thead>
+    <tbody id="packetTableBody"></tbody>
+  </table>
+
+  <div class="pagination">
+    <button id="prevPage">Previous</button>
+    <span id="pageInfo">Page 1</span>
+    <button id="nextPage">Next</button>
+  </div>
+</section>
+
+<script>
+const summaryData = {{ summary | tojson }};
+
+// --- Protocol pie chart ---
+new Chart(document.getElementById('protocolChart'), {
+  type: 'pie',
+  data: {
+    labels: Object.keys(summaryData.protocol_counts),
+    datasets: [{
+      data: Object.values(summaryData.protocol_counts),
+      backgroundColor: ['#4f8cff','#ff6b6b','#ffd93d','#6bcB77','#a685e2',
+                         '#ff9f6b','#6bd9ff','#e26b9f','#9fd96b','#6b8cff']
+    }]
+  },
+  options: { plugins: { legend: { position: 'bottom' } } }
+});
+
+// --- Top sources bar chart ---
+new Chart(document.getElementById('sourceChart'), {
+  type: 'bar',
+  data: {
+    labels: Object.keys(summaryData.top_sources),
+    datasets: [{
+      label: 'Packets',
+      data: Object.values(summaryData.top_sources),
+      backgroundColor: '#4f8cff'
+    }]
+  },
+  options: { plugins: { legend: { display: false } }, scales: { x: { ticks: { autoSkip: false } } } }
+});
+
+// --- Packet table with search / filter / pagination ---
+let currentPage = 1;
+const perPage = 25;
+
+async function loadPackets() {
+  const search = document.getElementById('searchBox').value;
+  const protocol = document.getElementById('protocolFilter').value;
+  const params = new URLSearchParams({ search, protocol, page: currentPage, per_page: perPage });
+
+  const res = await fetch('/api/packets?' + params.toString());
+  const data = await res.json();
+
+  const tbody = document.getElementById('packetTableBody');
+  tbody.innerHTML = '';
+  data.rows.forEach(row => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${row['No.'] ?? ''}</td>
+      <td>${row['Time'] ?? ''}</td>
+      <td>${row['Source'] ?? ''}</td>
+      <td>${row['Destination'] ?? ''}</td>
+      <td><span class="proto-tag">${row['Protocol'] ?? ''}</span></td>
+      <td>${row['Length'] ?? ''}</td>
+      <td class="info-cell">${row['Info'] ?? ''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  const totalPages = Math.max(Math.ceil(data.total / perPage), 1);
+  document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages}`;
+}
+
+document.getElementById('searchBox').addEventListener('input', () => { currentPage = 1; loadPackets(); });
+document.getElementById('protocolFilter').addEventListener('change', () => { currentPage = 1; loadPackets(); });
+document.getElementById('prevPage').addEventListener('click', () => { if (currentPage > 1) { currentPage--; loadPackets(); } });
+document.getElementById('nextPage').addEventListener('click', () => { currentPage++; loadPackets(); });
+
+loadPackets();
+</script>
+
+</body>
+</html>
